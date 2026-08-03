@@ -177,10 +177,16 @@ pub type UniCharCount = std::os::raw::c_ulong;
 pub type UniChar = std::os::raw::c_ushort;
 pub type OSStatus = i32;
 
+pub type TSMDocumentID = *mut c_void;
+pub type TSMDocumentPropertyTag = u32;
+
 #[allow(non_upper_case_globals)]
 pub const kUCKeyActionDisplay: u16 = 3;
 #[allow(non_upper_case_globals)]
 pub const kUCKeyTranslateNoDeadKeysMask: OptionBits = 1;
+#[allow(non_upper_case_globals)]
+// Restrict input to this set of enabled Input sources (from TextServices.h).
+pub const kTSMDocumentEnabledInputSourcesPropertyTag: TSMDocumentPropertyTag = 0x656e_6973; // 'enis'
 
 #[link(name = "Carbon", kind = "framework")]
 extern "C" {
@@ -193,6 +199,36 @@ extern "C" {
     ) -> *mut c_void;
 
     pub fn TISCopyCurrentKeyboardLayoutInputSource() -> TISInputSourceRef;
+    pub fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
+
+    // Returns a list of input sources capable of ASCII input (e.g. "ABC").
+    #[allow(non_snake_case)]
+    pub fn TISCreateASCIICapableInputSourceList() -> CFArrayRef;
+    // Selects the given input source, making it the current keyboard input source.
+    #[allow(non_snake_case)]
+    pub fn TISSelectInputSource(inputSource: TISInputSourceRef) -> OSStatus;
+
+    // Secure event input: while enabled, keyboard events are not delivered to
+    // other processes and the input source cannot be switched.
+    #[allow(non_snake_case)]
+    pub fn EnableSecureEventInput() -> OSStatus;
+    #[allow(non_snake_case)]
+    pub fn DisableSecureEventInput() -> OSStatus;
+
+    // Restrict the input sources available to this application to those in the
+    // given array (see `kTSMDocumentEnabledInputSourcesPropertyTag`).
+    #[allow(non_snake_case)]
+    pub fn TSMSetDocumentProperty(
+        docID: TSMDocumentID,
+        propertyTag: TSMDocumentPropertyTag,
+        propertySize: u32,
+        propertyData: *mut c_void,
+    ) -> OSStatus;
+    #[allow(non_snake_case)]
+    pub fn TSMRemoveDocumentProperty(
+        docID: TSMDocumentID,
+        propertyTag: TSMDocumentPropertyTag,
+    ) -> OSStatus;
 
     pub fn LMGetKbdType() -> u8;
 

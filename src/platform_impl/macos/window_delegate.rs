@@ -208,12 +208,16 @@ declare_class!(
             trace_scope!("windowDidBecomeKey:");
             // TODO: center the cursor if the window had mouse grab when it
             // lost focus
+            self.view().update_secure_input();
             self.queue_event(WindowEvent::Focused(true));
         }
 
         #[method(windowDidResignKey:)]
         fn window_did_resign_key(&self, _: Option<&AnyObject>) {
             trace_scope!("windowDidResignKey:");
+            // Secure event input is a global, reference-counted state, so it
+            // must be disabled when the window loses focus.
+            self.view().update_secure_input();
             // It happens rather often, e.g. when the user is Cmd+Tabbing, that the
             // NSWindowDelegate will receive a didResignKey event despite no event
             // being received when the modifiers are released.  This is because

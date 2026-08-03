@@ -8,7 +8,7 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventPhase, NSResponder, NSTextInputClient,
-    NSTrackingRectTag, NSView, NSViewFrameDidChangeNotification,
+    NSTextInputContext, NSTrackingRectTag, NSView, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSCopying,
@@ -333,8 +333,9 @@ declare_class!(
             trace_scope!("unmarkText");
             *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
 
-            let input_context = self.inputContext().expect("input context");
-            input_context.discardMarkedText();
+            if let Some(input_context) = self.inputContext() {
+                input_context.discardMarkedText();
+            }
 
             self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
             if self.is_ime_enabled() {
@@ -774,6 +775,19 @@ declare_class!(
             trace_scope!("acceptsFirstMouse:");
             self.ivars().accepts_first_mouse
         }
+
+        #[method_id(inputContext)]
+        fn input_context(&self) -> Option<Retained<NSTextInputContext>> {
+            if self.ivars().ime_allowed.get() {
+                let context: Option<Retained<NSTextInputContext>> =
+                    unsafe { msg_send_id![super(self), inputContext] };
+                context
+            } else {
+                // When IME is not allowed, act like a secure text field by
+                // completely disconnecting the view from the input method.
+                None
+            }
+        }
     }
 );
 
@@ -843,8 +857,7 @@ impl WinitView {
 
     fn current_input_source(&self) -> String {
         self.inputContext()
-            .expect("input context")
-            .selectedKeyboardInputSource()
+            .and_then(|input_context| input_context.selectedKeyboardInputSource())
             .map(|input_source| input_source.to_string())
             .unwrap_or_default()
     }
@@ -877,7 +890,19 @@ impl WinitView {
         }
         self.ivars().ime_allowed.set(ime_allowed);
         if self.ivars().ime_allowed.get() {
+            // (Re)create the input context and activate it, since the view may
+            // already be first responder while the context was disconnected.
+            if let Some(input_context) = self.inputContext() {
+                unsafe { input_context.activate() };
+            }
+            self.update_secure_input();
             return;
+        }
+
+        // Deactivate the input context before disconnecting the view from the
+        // input method.
+        if let Some(input_context) = self.inputContext() {
+            unsafe { input_context.deactivate() };
         }
 
         // Clear markedText
@@ -887,13 +912,35 @@ impl WinitView {
             self.ivars().ime_state.set(ImeState::Disabled);
             self.queue_event(WindowEvent::Ime(Ime::Disabled));
         }
+
+        // Mimic password-field behavior: while the window is key, enable secure
+        // event input and coerce the keyboard back to an ASCII input source.
+        self.update_secure_input();
+    }
+
+    /// Enable/disable secure event input to match the IME state.
+    ///
+    /// While IME is disallowed (like a password field), the current process is
+    /// put into secure event input mode and the keyboard input source is
+    /// switched to an ASCII-capable one. This is only done while the window is
+    /// the key window; secure event input is a global, reference-counted state,
+    /// so it must be disabled again when the window loses focus.
+    pub(super) fn update_secure_input(&self) {
+        if !self.ivars().ime_allowed.get() && self.window().isKeyWindow() {
+            super::secure_input::enter_password_mode();
+            super::secure_input::set_secure_event_input(true);
+        } else {
+            super::secure_input::set_secure_event_input(false);
+            super::secure_input::leave_password_mode();
+        }
     }
 
     pub(super) fn set_ime_cursor_area(&self, position: NSPoint, size: NSSize) {
         self.ivars().ime_position.set(position);
         self.ivars().ime_size.set(size);
-        let input_context = self.inputContext().expect("input context");
-        input_context.invalidateCharacterCoordinates();
+        if let Some(input_context) = self.inputContext() {
+            input_context.invalidateCharacterCoordinates();
+        }
     }
 
     /// Reset modifiers and emit a synthetic ModifiersChanged event if deemed necessary.
